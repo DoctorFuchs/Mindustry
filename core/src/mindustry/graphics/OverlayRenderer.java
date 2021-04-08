@@ -67,7 +67,7 @@ public class OverlayRenderer{
                         else {
                             Lines.stroke(1f, unit.team().color);
                         }
-                        Lines.lineAngle(player.x + Tmp.v1.x, player.y + Tmp.v1.y, Tmp.v1.angle(), 3f);
+                        Lines.lineAngle(player.x + Tmp.v1.x, player.y + Tmp.v1.y, Tmp.v1.angle(), 4f);
                         Draw.reset();
                     }
                 });
