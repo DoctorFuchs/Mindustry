@@ -1,10 +1,10 @@
 package mindustry.logic;
 
 import arc.*;
+import arc.math.*;
 import arc.math.geom.*;
 import arc.struct.*;
 import arc.util.*;
-import arc.util.noise.*;
 import mindustry.*;
 import mindustry.ai.types.*;
 import mindustry.content.*;
@@ -27,9 +27,6 @@ import static mindustry.Vars.*;
 
 public class LExecutor{
     public static final int maxInstructions = 1000;
-
-    //for noise operations
-    public static final Simplex noise = new Simplex();
 
     //special variables
     public static final int
@@ -60,9 +57,10 @@ public class LExecutor{
 
     /** Runs a single instruction. */
     public void runOnce(){
-        //set time
-        vars[varTime].numval = Time.millis();
-        vars[varTick].numval = Time.time;
+        //set up time; note that @time is now only updated once every invocation and directly based off of @tick.
+        //having time be based off of user system time was a very bad idea.
+        vars[varTime].numval = state.tick / 60.0 * 1000.0;
+        vars[varTick].numval = state.tick;
 
         //reset to start
         if(vars[varCounter].numval >= instructions.length || vars[varCounter].numval < 0){
@@ -337,7 +335,7 @@ public class LExecutor{
         /** Checks is a unit is valid for logic AI control, and returns the controller. */
         @Nullable
         public static LogicAI checkLogicAI(LExecutor exec, Object unitObj){
-            if(unitObj instanceof Unit unit && exec.obj(varUnit) == unit && unit.team == exec.team && !unit.isPlayer() && !(unit.controller() instanceof FormationAI)){
+            if(unitObj instanceof Unit unit && unit.isValid() && exec.obj(varUnit) == unit && unit.team == exec.team && !unit.isPlayer() && !(unit.controller() instanceof FormationAI)){
                 if(unit.controller() instanceof LogicAI la){
                     la.controller = exec.building(varThis);
                     return la;
@@ -367,6 +365,9 @@ public class LExecutor{
                 float x1 = World.unconv(exec.numf(p1)), y1 = World.unconv(exec.numf(p2)), d1 = World.unconv(exec.numf(p3));
 
                 switch(type){
+                    case idle -> {
+                        ai.control = type;
+                    }
                     case move, stop, approach -> {
                         ai.control = type;
                         ai.moveX = x1;
@@ -430,27 +431,32 @@ public class LExecutor{
                                     Call.pickedUnitPayload(unit, result);
                                 }
                             }else{ //buildings
-                                Building tile = world.buildWorld(unit.x, unit.y);
+                                Building build = world.buildWorld(unit.x, unit.y);
 
                                 //TODO copy pasted code
-                                if(tile != null && tile.team == unit.team){
-                                    if(tile.block.buildVisibility != BuildVisibility.hidden && tile.canPickup() && pay.canPickup(tile)){
-                                        Call.pickedBuildPayload(unit, tile, true);
-                                    }else{ //pick up block payload
-                                        Payload current = tile.getPayload();
-                                        if(current != null && pay.canPickupPayload(current)){
-                                            Call.pickedBuildPayload(unit, tile, false);
-                                        }
+                                if(build != null && build.team == unit.team){
+                                    Payload current = build.getPayload();
+                                    if(current != null && pay.canPickupPayload(current)){
+                                        Call.pickedBuildPayload(unit, build, false);
+                                        //pick up whole building directly
+                                    }else if(build.block.buildVisibility != BuildVisibility.hidden && build.canPickup() && pay.canPickup(build)){
+                                        Call.pickedBuildPayload(unit, build, true);
                                     }
                                 }
                             }
                             ai.payTimer = LogicAI.transferDelay;
                         }
                     }
+                    case payEnter -> {
+                        Building build = world.buildWorld(unit.x, unit.y);
+                        if(build != null && unit.team() == build.team && build.canControlSelect(unit)){
+                            Call.unitBuildingControlSelect(unit, build);
+                        }
+                    }
                     case build -> {
-                        if(state.rules.logicUnitBuild && unit.canBuild() && exec.obj(p3) instanceof Block block){
+                        if(state.rules.logicUnitBuild && unit.canBuild() && exec.obj(p3) instanceof Block block && block.canBeBuilt()){
                             int x = World.toTile(x1 - block.offset/tilesize), y = World.toTile(y1 - block.offset/tilesize);
-                            int rot = exec.numi(p4);
+                            int rot = Mathf.mod(exec.numi(p4), 4);
 
                             //reset state of last request when necessary
                             if(ai.plan.x != x || ai.plan.y != y || ai.plan.block != block || unit.plans.isEmpty()){
@@ -488,13 +494,22 @@ public class LExecutor{
                     case itemDrop -> {
                         if(ai.itemTimer > 0) return;
 
-                        Building build = exec.building(p1);
-                        int dropped = Math.min(unit.stack.amount, exec.numi(p2));
-                        if(build != null && build.team == unit.team && build.isValid() && dropped > 0 && unit.within(build, logicItemTransferRange + build.block.size * tilesize/2f)){
-                            int accepted = build.acceptStack(unit.item(), dropped, unit);
-                            if(accepted > 0){
-                                Call.transferItemTo(unit, unit.item(), accepted, unit.x, unit.y, build);
-                                ai.itemTimer = LogicAI.transferDelay;
+                        //clear item when dropping to @air
+                        if(exec.obj(p1) == Blocks.air){
+                            //only server-side; no need to call anything, as items are synced in snapshots
+                            if(!net.client()){
+                                unit.clearItem();
+                            }
+                            ai.itemTimer = LogicAI.transferDelay;
+                        }else{
+                            Building build = exec.building(p1);
+                            int dropped = Math.min(unit.stack.amount, exec.numi(p2));
+                            if(build != null && build.team == unit.team && build.isValid() && dropped > 0 && unit.within(build, logicItemTransferRange + build.block.size * tilesize/2f)){
+                                int accepted = build.acceptStack(unit.item(), dropped, unit);
+                                if(accepted > 0){
+                                    Call.transferItemTo(unit, unit.item(), accepted, unit.x, unit.y, build);
+                                    ai.itemTimer = LogicAI.transferDelay;
+                                }
                             }
                         }
                     }
@@ -541,7 +556,7 @@ public class LExecutor{
         public void run(LExecutor exec){
             Object obj = exec.obj(target);
             if(obj instanceof Building b && b.team == exec.team && exec.linkIds.contains(b.id)){
-                if(type.isObj){
+                if(type.isObj && exec.var(p1).isobj){
                     b.control(type, exec.obj(p1), exec.num(p2), exec.num(p3), exec.num(p4));
                 }else{
                     b.control(type, exec.num(p1), exec.num(p2), exec.num(p3), exec.num(p4));
@@ -707,6 +722,7 @@ public class LExecutor{
                 if((base instanceof Building && timer.get(30f)) || (ai != null && ai.checkTargetTimer(this))){
                     //if any of the targets involve enemies
                     boolean enemies = target1 == RadarTarget.enemy || target2 == RadarTarget.enemy || target3 == RadarTarget.enemy;
+                    boolean allies = target1 == RadarTarget.ally || target2 == RadarTarget.ally || target3 == RadarTarget.ally;
 
                     best = null;
                     bestValue = 0;
@@ -717,6 +733,11 @@ public class LExecutor{
                             if(data.items[i].team != r.team()){
                                 find(r, range, sortDir, data.items[i].team);
                             }
+                        }
+                    }else if(!allies){
+                        Seq<TeamData> data = state.teams.present;
+                        for(int i = 0; i < data.size; i++){
+                            find(r, range, sortDir, data.items[i].team);
                         }
                     }else{
                         find(r, range, sortDir, r.team());
@@ -768,7 +789,6 @@ public class LExecutor{
             Var v = exec.var(to);
             Var f = exec.var(from);
 
-            //TODO error out when the from-value is a constant
             if(!v.constant){
                 if(f.isobj){
                     v.objval = f.objval;
@@ -867,7 +887,7 @@ public class LExecutor{
         }
 
         static int packSign(int value){
-            return (Math.abs(value) & 0b011111111) | (value < 0 ? 0b1000000000 : 0);
+            return (Math.abs(value) & 0b0111111111) | (value < 0 ? 0b1000000000 : 0);
         }
     }
 
@@ -914,25 +934,30 @@ public class LExecutor{
             //this should avoid any garbage allocation
             Var v = exec.var(value);
             if(v.isobj && value != 0){
-                String strValue =
-                    v.objval == null ? "null" :
-                    v.objval instanceof String s ? s :
-                    v.objval == Blocks.stoneWall ? "solid" : //special alias
-                    v.objval instanceof MappableContent content ? content.name :
-                    v.objval instanceof Content ? "[content]" :
-                    v.objval instanceof Building build ? build.block.name :
-                    v.objval instanceof Unit unit ? unit.type.name :
-                    "[object]";
+                String strValue = toString(v.objval);
 
                 exec.textBuffer.append(strValue);
             }else{
                 //display integer version when possible
-                if(Math.abs(v.numval - (long)v.numval) < 0.000001){
+                if(Math.abs(v.numval - (long)v.numval) < 0.00001){
                     exec.textBuffer.append((long)v.numval);
                 }else{
                     exec.textBuffer.append(v.numval);
                 }
             }
+        }
+
+        public static String toString(Object obj){
+            return
+                obj == null ? "null" :
+                obj instanceof String s ? s :
+                obj == Blocks.stoneWall ? "solid" : //special alias
+                obj instanceof MappableContent content ? content.name :
+                obj instanceof Content ? "[content]" :
+                obj instanceof Building build ? build.block.name :
+                obj instanceof Unit unit ? unit.type.name :
+                obj instanceof Enum<?> e ? e.name() :
+                "[object]";
         }
     }
 
@@ -1024,6 +1049,26 @@ public class LExecutor{
                 curTime += Time.delta / 60f;
                 frameId = Core.graphics.getFrameId();
             }
+        }
+    }
+
+    public static class LookupI implements LInstruction{
+        public int dest;
+        public int from;
+        public ContentType type;
+
+        public LookupI(int dest, int from, ContentType type){
+            this.dest = dest;
+            this.from = from;
+            this.type = type;
+        }
+
+        public LookupI(){
+        }
+
+        @Override
+        public void run(LExecutor exec){
+            exec.setobj(dest, constants.lookupContent(type, exec.numi(from)));
         }
     }
 

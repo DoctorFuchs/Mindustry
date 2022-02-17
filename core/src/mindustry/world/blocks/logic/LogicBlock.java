@@ -7,7 +7,6 @@ import arc.struct.Bits;
 import arc.struct.*;
 import arc.util.*;
 import arc.util.io.*;
-import mindustry.*;
 import mindustry.ai.types.*;
 import mindustry.core.*;
 import mindustry.gen.*;
@@ -41,6 +40,9 @@ public class LogicBlock extends Block{
         configurable = true;
         group = BlockGroup.logic;
         schematicPriority = 5;
+
+        //universal, no real requirements
+        envEnabled = Env.any;
 
         config(byte[].class, (LogicBuild build, byte[] data) -> build.readCompressed(data, true));
 
@@ -174,6 +176,7 @@ public class LogicBlock extends Block{
         public boolean active = true, valid;
         public int x, y;
         public String name;
+        public Building lastBuild;
 
         public LogicLink(int x, int y, String name, boolean valid){
             this.x = x;
@@ -197,14 +200,15 @@ public class LogicBlock extends Block{
         public Seq<LogicLink> links = new Seq<>();
         public boolean checkedDuplicates = false;
 
-        public void readCompressed(byte[] data, boolean relative){
-            DataInputStream stream = new DataInputStream(new InflaterInputStream(new ByteArrayInputStream(data)));
+        /** Block of code to run after load. */
+        public @Nullable Runnable loadBlock;
 
-            try{
+        public void readCompressed(byte[] data, boolean relative){
+            try(DataInputStream stream = new DataInputStream(new InflaterInputStream(new ByteArrayInputStream(data)))){
                 int version = stream.read();
 
                 int bytelen = stream.readInt();
-                if(bytelen > maxByteLen) throw new RuntimeException("Malformed logic data! Length: " + bytelen);
+                if(bytelen > maxByteLen) throw new IOException("Malformed logic data! Length: " + bytelen);
                 byte[] bytes = new byte[bytelen];
                 stream.readFully(bytes);
 
@@ -242,20 +246,8 @@ public class LogicBlock extends Block{
                 }
 
                 updateCode(new String(bytes, charset));
-            }catch(IOException e){
-                Log.err(e);
-            }
-        }
-
-        @Override
-        public void onProximityAdded(){
-            super.onProximityAdded();
-
-            //unbox buildings after reading
-            for(var v : executor.vars){
-                if(v.objval instanceof BuildingBox b){
-                    v.objval = world.build(b.pos);
-                }
+            }catch(Exception ignored){
+                //invalid logic doesn't matter here
             }
         }
 
@@ -351,11 +343,8 @@ public class LogicBlock extends Block{
 
                     executor.load(asm);
                 }catch(Exception e){
-                    Log.err("Failed to compile logic program @", code);
-                    Log.err(e);
-
                     //handle malformed code and replace it with nothing
-                    executor.load("");
+                    executor.load(code = "");
                 }
             }
         }
@@ -373,6 +362,12 @@ public class LogicBlock extends Block{
 
         @Override
         public void updateTile(){
+            //load up code from read()
+            if(loadBlock != null){
+                loadBlock.run();
+                loadBlock = null;
+            }
+
             executor.team = team;
 
             if(!checkedDuplicates){
@@ -401,20 +396,23 @@ public class LogicBlock extends Block{
 
                     if(!l.active) continue;
 
-                    boolean valid = validLink(world.build(l.x, l.y));
-                    if(valid != l.valid){
+                    var cur = world.build(l.x, l.y);
+
+                    boolean valid = validLink(cur);
+                    if(l.lastBuild == null) l.lastBuild = cur;
+                    if(valid != l.valid || l.lastBuild != cur){
+                        l.lastBuild = cur;
                         changed = true;
                         l.valid = valid;
                         if(valid){
-                            Building lbuild = world.build(l.x, l.y);
 
                             //this prevents conflicts
                             l.name = "";
                             //finds a new matching name after toggling
-                            l.name = findLinkName(lbuild.block);
+                            l.name = findLinkName(cur.block);
 
                             //remove redundant links
-                            links.removeAll(o -> world.build(o.x, o.y) == lbuild && o != l);
+                            links.removeAll(o -> world.build(o.x, o.y) == cur && o != l);
 
                             //break to prevent concurrent modification
                             updates = true;
@@ -448,9 +446,9 @@ public class LogicBlock extends Block{
         }
 
         public Seq<LogicLink> relativeConnections(){
-            Seq<LogicLink> copy = new Seq<>(links.size);
-            for(LogicLink l : links){
-                LogicLink c = l.copy();
+            var copy = new Seq<LogicLink>(links.size);
+            for(var l : links){
+                var c = l.copy();
                 c.x -= tileX();
                 c.y -= tileY();
                 copy.add(c);
@@ -494,7 +492,7 @@ public class LogicBlock extends Block{
         @Override
         public void buildConfiguration(Table table){
             table.button(Icon.pencil, Styles.clearTransi, () -> {
-                Vars.ui.logic.show(code, code -> configure(compress(code, relativeConnections())));
+                ui.logic.show(code, executor, code -> configure(compress(code, relativeConnections())));
             }).size(40);
         }
 
@@ -583,16 +581,16 @@ public class LogicBlock extends Block{
             //skip memory, it isn't used anymore
             read.skip(memory * 8);
 
-            updateCode(code, false, asm -> {
-
+            loadBlock = () -> updateCode(code, false, asm -> {
                 //load up the variables that were stored
                 for(int i = 0; i < varcount; i++){
                     BVar dest = asm.getVar(names[i]);
                     if(dest != null && !dest.constant){
-                        dest.value = values[i];
+                        dest.value = values[i] instanceof BuildingBox box ? world.build(box.pos) : values[i];
                     }
                 }
             });
+
         }
     }
 }

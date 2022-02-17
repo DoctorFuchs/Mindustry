@@ -10,6 +10,7 @@ import java.util.*;
 public enum StatUnit{
     blocks,
     blocksSquared,
+    tilesSecond,
     powerSecond,
     liquidSecond,
     itemsSecond,
@@ -18,8 +19,8 @@ public enum StatUnit{
     degrees,
     seconds,
     minutes,
-    perSecond,
-    perMinute,
+    perSecond(false),
+    perMinute(false),
     perShot(false),
     timesSpeed(false),
     percent(false),

@@ -31,13 +31,14 @@ public class BaseTurret extends Block{
         priority = TargetPriority.turret;
         group = BlockGroup.turrets;
         flags = EnumSet.of(BlockFlag.turret);
+        updateInUnits = false;
     }
 
     @Override
     public void init(){
         if(acceptCoolant && !consumes.has(ConsumeType.liquid)){
             hasLiquids = true;
-            consumes.add(new ConsumeLiquidFilter(liquid -> liquid.temperature <= 0.5f && liquid.flammability < 0.1f, 0.2f)).update(false).boost();
+            consumes.add(new ConsumeCoolant(0.2f)).update(false).boost();
         }
 
         super.init();

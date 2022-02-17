@@ -18,7 +18,7 @@ import static mindustry.Vars.*;
 public class MendProjector extends Block{
     public final int timerUse = timers++;
     public Color baseColor = Color.valueOf("84f491");
-    public Color phaseColor = Color.valueOf("ffd59e");
+    public Color phaseColor = baseColor;
     public @Load("@-top") TextureRegion topRegion;
     public float reload = 250f;
     public float range = 60f;
@@ -34,6 +34,9 @@ public class MendProjector extends Block{
         group = BlockGroup.projectors;
         hasPower = true;
         hasItems = true;
+        emitLight = true;
+        lightRadius = 50f;
+        envEnabled |= Env.space;
     }
 
     @Override
@@ -43,6 +46,7 @@ public class MendProjector extends Block{
 
     @Override
     public void setStats(){
+        stats.timePeriod = useTime;
         super.setStats();
 
         stats.add(Stat.repairTime, (int)(100f / healPercent * reload / 60f), StatUnit.seconds);
@@ -88,11 +92,17 @@ public class MendProjector extends Block{
                 float realRange = range + phaseHeat * phaseRangeBoost;
                 charge = 0f;
 
-                indexer.eachBlock(this, realRange, other -> other.damaged(), other -> {
+                indexer.eachBlock(this, realRange, Building::damaged, other -> {
                     other.heal(other.maxHealth() * (healPercent + phaseHeat * phaseBoost) / 100f * efficiency());
-                    Fx.healBlockFull.at(other.x, other.y, other.block.size, Tmp.c1.set(baseColor).lerp(phaseColor, phaseHeat));
+                    Fx.healBlockFull.at(other.x, other.y, other.block.size, baseColor);
                 });
             }
+        }
+
+        @Override
+        public double sense(LAccess sensor){
+            if(sensor == LAccess.progress) return Mathf.clamp(charge / reload);
+            return super.sense(sensor);
         }
 
         @Override
@@ -111,7 +121,7 @@ public class MendProjector extends Block{
             float f = 1f - (Time.time / 100f) % 1f;
 
             Draw.color(baseColor, phaseColor, phaseHeat);
-            Draw.alpha(heat * Mathf.absin(Time.time, 10f, 1f) * 0.5f);
+            Draw.alpha(heat * Mathf.absin(Time.time, 50f / Mathf.PI2, 1f) * 0.5f);
             Draw.rect(topRegion, x, y);
             Draw.alpha(1f);
             Lines.stroke((2f * f + 0.2f) * heat);
@@ -122,7 +132,7 @@ public class MendProjector extends Block{
 
         @Override
         public void drawLight(){
-            Drawf.light(team, x, y, 50f * smoothEfficiency, baseColor, 0.7f * smoothEfficiency);
+            Drawf.light(team, x, y, lightRadius * smoothEfficiency, baseColor, 0.7f * smoothEfficiency);
         }
 
         @Override

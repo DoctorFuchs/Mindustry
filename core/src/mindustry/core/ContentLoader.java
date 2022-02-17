@@ -8,8 +8,9 @@ import arc.struct.*;
 import arc.util.*;
 import mindustry.content.*;
 import mindustry.ctype.*;
-import mindustry.game.EventType.*;
 import mindustry.entities.bullet.*;
+import mindustry.game.EventType.*;
+import mindustry.io.*;
 import mindustry.mod.Mods.*;
 import mindustry.type.*;
 import mindustry.world.*;
@@ -34,7 +35,6 @@ public class ContentLoader{
         new StatusEffects(),
         new Liquids(),
         new Bullets(),
-        new AmmoTypes(),
         new UnitTypes(),
         new Blocks(),
         new Loadouts(),
@@ -48,7 +48,7 @@ public class ContentLoader{
         clear();
     }
 
-    /** Clears all initialized content.*/
+    /** Clears all initialized content. */
     public void clear(){
         contentNameMap = new ObjectMap[ContentType.all.length];
         contentMap = new Seq[ContentType.all.length];
@@ -75,7 +75,7 @@ public class ContentLoader{
         }
     }
 
-    /** Logs content statistics.*/
+    /** Logs content statistics. */
     public void logContent(){
         //check up ID mapping, make sure it's linear (debug only)
         for(Seq<Content> arr : contentMap){
@@ -95,15 +95,16 @@ public class ContentLoader{
         Log.debug("-------------------");
     }
 
-    /** Calls Content#init() on everything. Use only after all modules have been created.*/
+    /** Calls Content#init() on everything. Use only after all modules have been created. */
     public void init(){
         initialize(Content::init);
         if(constants != null) constants.init();
         Events.fire(new ContentInitEvent());
     }
 
-    /** Calls Content#load() on everything. Use only after all modules have been created on the client.*/
+    /** Calls Content#loadIcon() and Content#load() on everything. Use only after all modules have been created on the client. */
     public void load(){
+        initialize(Content::loadIcon);
         initialize(Content::load);
     }
 
@@ -132,9 +133,9 @@ public class ContentLoader{
     /** Loads block colors. */
     public void loadColors(){
         Pixmap pixmap = new Pixmap(files.internal("sprites/block_colors.png"));
-        for(int i = 0; i < pixmap.getWidth(); i++){
+        for(int i = 0; i < pixmap.width; i++){
             if(blocks().size > i){
-                int color = pixmap.getPixel(i, 0);
+                int color = pixmap.get(i, 0);
 
                 if(color == 0 || color == 255) continue;
 
@@ -148,11 +149,6 @@ public class ContentLoader{
         }
         pixmap.dispose();
         ColorMapper.load();
-    }
-
-    public void dispose(){
-        initialize(Content::dispose);
-        clear();
     }
 
     /** Get last piece of content created for error-handling purposes. */
@@ -211,10 +207,16 @@ public class ContentLoader{
     }
 
     public <T extends MappableContent> T getByName(ContentType type, String name){
-        if(contentNameMap[type.ordinal()] == null){
-            return null;
+        var map = contentNameMap[type.ordinal()];
+
+        if(map == null) return null;
+
+        //load fallbacks
+        if(type == ContentType.block){
+            name = SaveVersion.modContentNameMap.get(name, name);
         }
-        return (T)contentNameMap[type.ordinal()].get(name);
+
+        return (T)map.get(name);
     }
 
     public <T extends Content> T getByID(ContentType type, int id){
@@ -262,12 +264,20 @@ public class ContentLoader{
         return getByID(ContentType.item, id);
     }
 
+    public Item item(String name){
+        return getByName(ContentType.item, name);
+    }
+
     public Seq<Liquid> liquids(){
         return getBy(ContentType.liquid);
     }
 
     public Liquid liquid(int id){
         return getByID(ContentType.liquid, id);
+    }
+
+    public Liquid liquid(String name){
+        return getByName(ContentType.liquid, name);
     }
 
     public Seq<BulletType> bullets(){
@@ -282,15 +292,35 @@ public class ContentLoader{
         return getBy(ContentType.status);
     }
 
+    public StatusEffect statusEffect(String name){
+        return getByName(ContentType.status, name);
+    }
+
     public Seq<SectorPreset> sectors(){
         return getBy(ContentType.sector);
+    }
+
+    public SectorPreset sector(String name){
+        return getByName(ContentType.sector, name);
     }
 
     public Seq<UnitType> units(){
         return getBy(ContentType.unit);
     }
 
+    public UnitType unit(int id){
+        return getByID(ContentType.unit, id);
+    }
+
+    public UnitType unit(String name){
+        return getByName(ContentType.unit, name);
+    }
+
     public Seq<Planet> planets(){
         return getBy(ContentType.planet);
+    }
+
+    public Planet planet(String name){
+        return getByName(ContentType.planet, name);
     }
 }
